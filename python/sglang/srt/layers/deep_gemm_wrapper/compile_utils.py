@@ -512,3 +512,53 @@ def pp_parallel_deep_gemm_warmup(model_runner) -> None:
         time.perf_counter() - t0,
         model_runner.pp_rank,
     )
+
+
+def force_warmup_all_mhc_n_splits(model_runner) -> None:
+    """Pre-compile all reachable TF32_HC_PRENORM_GEMM n_splits for MHC models.
+
+    Adapts to any GPU (via n_sms) and any MHC model (via hc_hidden_size/hc_mult).
+    """
+    if not _ENABLE_JIT_DEEPGEMM_PRECOMPILE or not _DO_COMPILE_ALL:
+        return
+    if not ENABLE_JIT_DEEPGEMM:
+        return
+
+    hc_hidden_size = getattr(model_runner.model_config, "hc_hidden_size", None)
+    if hc_hidden_size is None:
+        return
+
+    n_sms = torch.cuda.get_device_properties(model_runner.device).multi_processor_count
+    hc_mult = getattr(model_runner.model_config.hf_text_config, "hc_mult", 1)
+
+    block_k = 64
+    num_block_k = (hc_hidden_size + block_k - 1) // block_k
+    max_n_splits = num_block_k // 4
+
+    all_n_splits = set()
+    for grid_size in range(1, n_sms + 1):
+        ns = max(1, min(n_sms // grid_size, max_n_splits))
+        all_n_splits.add(ns)
+
+    n_dim = hc_mult * (2 + hc_mult)
+
+    logger.info(
+        "Force-warming %d TF32_HC_PRENORM_GEMM n_splits: %s",
+        len(all_n_splits),
+        sorted(all_n_splits),
+    )
+
+    t0 = time.perf_counter()
+    for ns in sorted(all_n_splits):
+        _maybe_compile_deep_gemm_one_type_all(
+            kernel_type=DeepGemmKernelType.TF32_HC_PRENORM_GEMM,
+            n=n_dim,
+            k=hc_hidden_size,
+            num_groups=ns,
+        )
+
+    logger.info(
+        "Force-warmup TF32 n_splits done in %.2fs (%d values).",
+        time.perf_counter() - t0,
+        len(all_n_splits),
+    )

@@ -2392,6 +2392,13 @@ class ModelRunner(ModelRunnerKVCacheMixin):
 
             pp_parallel_deep_gemm_warmup(self)
 
+        if deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM:
+            from sglang.srt.layers.deep_gemm_wrapper.compile_utils import (
+                force_warmup_all_mhc_n_splits,
+            )
+
+            force_warmup_all_mhc_n_splits(self)
+
     def _pre_initialize_flashinfer_allreduce_workspace(self):
         """Pre-initialize flashinfer allreduce fusion workspaces.
 
